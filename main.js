@@ -476,6 +476,7 @@ ipcMain.handle('get-invoice-details', (event, invoiceId) => {
         FROM invoice_items ii
         JOIN products p ON ii.product_id = p.id
         WHERE ii.invoice_id = ?
+        ORDER BY ii.id ASC
     `);
     
     const invoice = invoiceStmt.get(invoiceId);

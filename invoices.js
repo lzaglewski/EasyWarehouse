@@ -40,51 +40,10 @@ function calculateTotal() {
 }
 
 // Dodaj obsługę zdarzeń dla istniejących elementów
-document.querySelectorAll('.invoice-item').forEach(item => {
-    item.querySelector('.quantity').addEventListener('input', calculateTotal);
-    item.querySelector('.unit-price').addEventListener('input', calculateTotal);
-    item.querySelector('.product-select').addEventListener('change', updateUnitPrice);
-    item.querySelector('.remove-item').addEventListener('click', () => {
-        item.remove();
-        calculateTotal();
-    });
-});
+document.querySelectorAll('.invoice-item').forEach(attachItemEvents);
 
 // Obsługa dodawania nowego produktu do faktury
-document.getElementById('addItemBtn').addEventListener('click', () => {
-    const itemsContainer = document.getElementById('invoiceItems');
-    const newItem = document.createElement('div');
-    newItem.className = 'invoice-item';
-    newItem.innerHTML = `
-        <div class="row">
-            <div class="col-md-4">
-                <select class="form-select product-select" required>
-                    <option value="">Wybierz produkt</option>
-                </select>
-            </div>
-            <div class="col-md-2">
-                <input type="number" class="form-control quantity" min="1" value="1" required>
-            </div>
-            <div class="col-md-2">
-                <input type="number" class="form-control unit-price" step="0.01" required>
-            </div>
-            <div class="col-md-2">
-                <button type="button" class="btn btn-danger remove-item">Usuń</button>
-            </div>
-        </div>
-    `;
-    itemsContainer.appendChild(newItem);
-    updateProductSelects();
-    
-    // Dodaj obsługę zdarzeń dla nowego elementu
-    newItem.querySelector('.product-select').addEventListener('change', updateUnitPrice);
-    newItem.querySelector('.quantity').addEventListener('input', calculateTotal);
-    newItem.querySelector('.unit-price').addEventListener('input', calculateTotal);
-    newItem.querySelector('.remove-item').addEventListener('click', () => {
-        newItem.remove();
-        calculateTotal();
-    });
-});
+document.getElementById('addItemBtn').addEventListener('click', addNewItem);
 
 // Funkcja do aktualizacji ceny jednostkowej po wybraniu produktu
 function updateUnitPrice(event) {
@@ -152,21 +111,70 @@ async function loadInvoices() {
 
 // Funkcja do wyświetlania szczegółów faktury
 async function viewInvoice(invoiceId) {
-    const { invoice, items } = await ipcRenderer.invoke('get-invoice-details', invoiceId);
-    
-    let details = `Faktura ${invoice.invoice_number}\n`;
-    details += `Klient: ${invoice.customer_name}\n`;
-    details += `Data wystawienia: ${invoice.issue_date}\n`;
-    details += `Termin płatności: ${invoice.due_date || '-'}\n\n`;
-    details += 'Pozycje:\n';
-    
-    items.forEach(item => {
-        details += `${item.product_name}: ${item.quantity} x ${item.unit_price} zł = ${item.total_price} zł\n`;
-    });
-    
-    details += `\nSuma: ${invoice.total_amount} zł`;
-    
-    alert(details);
+    try {
+        const { invoice, items } = await ipcRenderer.invoke('get-invoice-details', invoiceId);
+        
+        // Wypełnianie danych faktury w oknie modalnym
+        document.getElementById('invoiceNumber').textContent = invoice.invoice_number;
+        document.getElementById('invoiceCustomer').textContent = invoice.customer_name;
+        document.getElementById('invoiceIssueDate').textContent = invoice.issue_date;
+        document.getElementById('invoiceDueDate').textContent = invoice.due_date || '-';
+        
+        const statusElement = document.getElementById('invoiceStatus');
+        statusElement.textContent = invoice.status;
+        if (invoice.status === 'paid') {
+            statusElement.classList.add('bg-success');
+        } else if (invoice.status === 'draft') {
+            statusElement.classList.add('bg-warning');
+        } else {
+            statusElement.classList.add('bg-primary');
+        }
+        
+        // Wypełnianie tabeli z pozycjami faktury
+        const itemsTableBody = document.getElementById('invoiceItemsTable');
+        itemsTableBody.innerHTML = '';
+        
+        items.forEach(item => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${item.product_name}</td>
+                <td>${item.quantity}</td>
+                <td>${item.unit_price.toFixed(2)} zł</td>
+                <td>${item.total_price.toFixed(2)} zł</td>
+            `;
+            itemsTableBody.appendChild(row);
+        });
+        
+        document.getElementById('invoiceTotalAmount').textContent = `${invoice.total_amount.toFixed(2)} zł`;
+        
+        // Wypełnianie danych do wydruku
+        document.getElementById('printInvoiceNumber').textContent = invoice.invoice_number;
+        document.getElementById('printCustomer').textContent = invoice.customer_name;
+        document.getElementById('printIssueDate').textContent = invoice.issue_date;
+        document.getElementById('printDueDate').textContent = invoice.due_date || '-';
+        
+        const printItemsTable = document.getElementById('printItemsTable');
+        printItemsTable.innerHTML = '';
+        
+        items.forEach(item => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${item.product_name}</td>
+                <td>${item.quantity}</td>
+                <td>${item.unit_price.toFixed(2)} zł</td>
+                <td>${item.total_price.toFixed(2)} zł</td>
+            `;
+            printItemsTable.appendChild(row);
+        });
+        
+        document.getElementById('printTotalAmount').textContent = invoice.total_amount.toFixed(2);
+        
+        // Wyświetlanie okna modalnego
+        const modal = new bootstrap.Modal(document.getElementById('invoiceDetailsModal'));
+        modal.show();
+    } catch (error) {
+        alert('Wystąpił błąd podczas pobierania danych faktury: ' + error.message);
+    }
 }
 
 // Obsługa przycisków
@@ -185,4 +193,77 @@ document.getElementById('cancelInvoiceBtn').addEventListener('click', () => {
 document.addEventListener('DOMContentLoaded', () => {
     loadProducts();
     loadInvoices();
-}); 
+    
+    // Dodanie obsługi przycisku drukowania
+    document.getElementById('printInvoiceBtn').addEventListener('click', printInvoice);
+});
+
+// Funkcja do drukowania faktury
+function printInvoice() {
+    const printContent = document.getElementById('printTemplate').innerHTML;
+    const originalContent = document.body.innerHTML;
+    
+    document.body.innerHTML = printContent;
+    window.print();
+    document.body.innerHTML = originalContent;
+    
+    // Odtwórz zdarzenia po przywróceniu oryginalnej treści
+    loadProducts();
+    loadInvoices();
+    
+    // Inicjalizacja Bootstrap na nowo
+    document.getElementById('newInvoiceBtn').addEventListener('click', () => {
+        document.getElementById('invoiceForm').style.display = 'block';
+        document.getElementById('invoiceFormElement').reset();
+        document.getElementById('issueDate').valueAsDate = new Date();
+        calculateTotal();
+    });
+    
+    document.getElementById('cancelInvoiceBtn').addEventListener('click', () => {
+        document.getElementById('invoiceForm').style.display = 'none';
+    });
+    
+    document.getElementById('addItemBtn').addEventListener('click', addNewItem);
+    document.getElementById('printInvoiceBtn').addEventListener('click', printInvoice);
+    
+    document.querySelectorAll('.invoice-item').forEach(attachItemEvents);
+}
+
+// Funkcja pomocnicza do dodawania nowego elementu (zaktualizowana wersja)
+function addNewItem() {
+    const itemsContainer = document.getElementById('invoiceItems');
+    const newItem = document.createElement('div');
+    newItem.className = 'invoice-item';
+    newItem.innerHTML = `
+        <div class="row">
+            <div class="col-md-4">
+                <select class="form-select product-select" required>
+                    <option value="">Wybierz produkt</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <input type="number" class="form-control quantity" min="1" value="1" required>
+            </div>
+            <div class="col-md-2">
+                <input type="number" class="form-control unit-price" step="0.01" required>
+            </div>
+            <div class="col-md-2">
+                <button type="button" class="btn btn-danger remove-item">Usuń</button>
+            </div>
+        </div>
+    `;
+    itemsContainer.appendChild(newItem);
+    updateProductSelects();
+    attachItemEvents(newItem);
+}
+
+// Funkcja do dołączania zdarzeń do elementów faktury
+function attachItemEvents(item) {
+    item.querySelector('.product-select').addEventListener('change', updateUnitPrice);
+    item.querySelector('.quantity').addEventListener('input', calculateTotal);
+    item.querySelector('.unit-price').addEventListener('input', calculateTotal);
+    item.querySelector('.remove-item').addEventListener('click', () => {
+        item.remove();
+        calculateTotal();
+    });
+} 

@@ -17,6 +17,35 @@
         nav {
             margin-bottom: 2rem;
         }
+        /* Style dla podglądu faktury */
+        .invoice-header {
+            border-bottom: 1px solid #eee;
+            padding-bottom: 15px;
+        }
+        #invoiceNumber {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        #invoiceCustomer {
+            font-size: 1.1rem;
+        }
+        .badge.bg-success {
+            background-color: #28a745!important;
+        }
+        .badge.bg-warning {
+            background-color: #ffc107!important;
+            color: #212529;
+        }
+        .badge.bg-primary {
+            background-color: #007bff!important;
+        }
+        #invoiceDetailsModal .modal-body {
+            padding: 20px;
+        }
+        #invoiceItemsTable td {
+            vertical-align: middle;
+        }
     </style>
 </head>
 <body>
@@ -116,6 +145,138 @@
         </div>
     </div>
     
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="invoices.js"></script>
+    
+    <!-- Modal do podglądu faktury -->
+    <div class="modal fade" id="invoiceDetailsModal" tabindex="-1" aria-labelledby="invoiceDetailsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="invoiceDetailsModalLabel">Szczegóły faktury</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="invoiceDetailsContent">
+                    <div class="invoice-header mb-4">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h4 id="invoiceNumber"></h4>
+                                <div id="invoiceCustomer"></div>
+                            </div>
+                            <div class="col-md-6 text-end">
+                                <div>Data wystawienia: <span id="invoiceIssueDate"></span></div>
+                                <div>Termin płatności: <span id="invoiceDueDate"></span></div>
+                                <div class="mt-2">Status: <span id="invoiceStatus" class="badge"></span></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="invoice-items">
+                        <h5>Pozycje faktury</h5>
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Produkt</th>
+                                    <th>Ilość</th>
+                                    <th>Cena jednostkowa</th>
+                                    <th>Wartość</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invoiceItemsTable">
+                            </tbody>
+                            <tfoot>
+                                <tr>
+                                    <th colspan="3" class="text-end">Suma:</th>
+                                    <th id="invoiceTotalAmount"></th>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Zamknij</button>
+                    <button type="button" class="btn btn-primary" id="printInvoiceBtn">Drukuj fakturę</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Szablon do drukowania faktury -->
+    <div id="printTemplate" style="display: none;">
+        <div class="print-invoice">
+            <style>
+                @media print {
+                    body {
+                        font-family: Arial, sans-serif;
+                        margin: 0;
+                        padding: 20px;
+                    }
+                    .print-header {
+                        margin-bottom: 30px;
+                    }
+                    .print-title {
+                        font-size: 24px;
+                        margin-bottom: 10px;
+                    }
+                    .print-details {
+                        margin-bottom: 20px;
+                    }
+                    .print-table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        margin-bottom: 20px;
+                    }
+                    .print-table th, .print-table td {
+                        border: 1px solid #ddd;
+                        padding: 8px;
+                        text-align: left;
+                    }
+                    .print-table th {
+                        background-color: #f2f2f2;
+                    }
+                    .print-footer {
+                        margin-top: 30px;
+                        border-top: 1px solid #ddd;
+                        padding-top: 20px;
+                    }
+                    .print-total {
+                        font-weight: bold;
+                        text-align: right;
+                        margin-top: 10px;
+                    }
+                }
+            </style>
+            <div class="print-header">
+                <div class="print-title">Faktura <span id="printInvoiceNumber"></span></div>
+                <div class="print-details">
+                    <div>Klient: <span id="printCustomer"></span></div>
+                    <div>Data wystawienia: <span id="printIssueDate"></span></div>
+                    <div>Termin płatności: <span id="printDueDate"></span></div>
+                </div>
+            </div>
+            
+            <table class="print-table">
+                <thead>
+                    <tr>
+                        <th>Produkt</th>
+                        <th>Ilość</th>
+                        <th>Cena jednostkowa</th>
+                        <th>Wartość</th>
+                    </tr>
+                </thead>
+                <tbody id="printItemsTable">
+                </tbody>
+            </table>
+            
+            <div class="print-total">
+                Suma: <span id="printTotalAmount"></span> zł
+            </div>
+            
+            <div class="print-footer">
+                <div>EasyWarehouse</div>
+                <div>System zarządzania magazynem i fakturami</div>
+            </div>
+        </div>
+    </div>
 </body>
 </html> 
