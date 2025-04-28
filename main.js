@@ -7,27 +7,10 @@ const Database = require('better-sqlite3');
 let dbPath;
 let isFirstRun = false;
 
-if (process.env.NODE_ENV === 'development') {
-  dbPath = 'warehouse.db';
-  // Sprawdź, czy to pierwsze uruchomienie w trybie developerskim
-  isFirstRun = !fs.existsSync(dbPath);
-} else {
-  // W wersji produkcyjnej użyj katalogu danych aplikacji
-  const userDataPath = app.getPath('userData');
-  dbPath = path.join(userDataPath, 'warehouse.db');
-  
-  // Sprawdź, czy plik bazy danych istnieje w katalogu użytkownika
-  isFirstRun = !fs.existsSync(dbPath);
-  
-  if (isFirstRun) {
-    const resourceDbPath = process.resourcesPath ? path.join(process.resourcesPath, 'warehouse.db') : 'warehouse.db';
-    
-    // Jeśli plik istnieje w zasobach, skopiuj go
-    if (fs.existsSync(resourceDbPath)) {
-      fs.copyFileSync(resourceDbPath, dbPath);
-    }
-  }
-}
+// Zawsze używaj katalogu głównego aplikacji
+dbPath = 'warehouse.db';
+// Sprawdź, czy to pierwsze uruchomienie
+isFirstRun = !fs.existsSync(dbPath);
 
 // Inicjalizacja bazy danych
 const db = new Database(dbPath);
