@@ -4,6 +4,10 @@ const { ipcRenderer } = require('electron');
 async function refreshProductsList() {
     const products = await ipcRenderer.invoke('get-products');
     const tbody = document.getElementById('productsList');
+    
+    // Sprawdź czy element tabeli istnieje na bieżącej stronie
+    if (!tbody) return;
+    
     tbody.innerHTML = '';
 
     products.forEach(product => {

@@ -116,9 +116,9 @@ function createWindow() {
 
   // Ładowanie pliku HTML z uwzględnieniem kontekstu (produkcja vs rozwój)
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
-    mainWindow.loadFile('index.html');
+    mainWindow.loadFile('products_in_stock.html');
   } else {
-    mainWindow.loadFile(path.join(__dirname, 'index.html'));
+    mainWindow.loadFile(path.join(__dirname, 'products_in_stock.html'));
   }
   
   // mainWindow.webContents.openDevTools(); // Odkomentuj dla trybu deweloperskiego
