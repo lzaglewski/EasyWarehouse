@@ -38,4 +38,7 @@ tmp/
 temp/
 
 # Pliki Electron
-.electron-builder.env 
+.electron-builder.env
+node_modules/electron/dist/
+node_modules/electron/path.txt
+node_modules/electron/version 
