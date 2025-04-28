@@ -1,0 +1,31 @@
+{
+  "name": "easywarehouse",
+  "version": "1.0.0",
+  "description": "Aplikacja do zarządzania magazynem i fakturami",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "keywords": [
+    "warehouse",
+    "inventory",
+    "electron"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.9.1",
+    "electron-store": "^8.1.0"
+  },
+  "build": {
+    "appId": "com.easywarehouse.app",
+    "mac": {
+      "category": "public.app-category.business"
+    }
+  }
+}
