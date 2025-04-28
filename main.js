@@ -53,6 +53,7 @@ db.exec(`
     sale_date TEXT,
     invoice_date TEXT,
     invoice_id INTEGER,
+    needs_restocking BOOLEAN DEFAULT 0,
     FOREIGN KEY (product_id) REFERENCES products(id),
     FOREIGN KEY (invoice_id) REFERENCES invoices(id)
   );
@@ -129,6 +130,7 @@ ipcMain.handle('get-products', () => {
            (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'na magazynie') as items_in_stock,
            (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'sprzedany') as items_sold,
            (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as items_invoiced,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND needs_restocking = 1) as items_to_restock,
            (SELECT MAX(sale_date) FROM product_items WHERE product_id = p.id AND status IN ('sprzedany', 'fakturowany')) as last_sale_date,
            (SELECT MAX(invoice_date) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as last_invoice_date
     FROM products p
@@ -144,6 +146,7 @@ ipcMain.handle('get-products-in-stock', () => {
            (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'na magazynie') as items_in_stock,
            (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'sprzedany') as items_sold,
            (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as items_invoiced,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND needs_restocking = 1) as items_to_restock,
            (SELECT MAX(sale_date) FROM product_items WHERE product_id = p.id AND status IN ('sprzedany', 'fakturowany')) as last_sale_date,
            (SELECT MAX(invoice_date) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as last_invoice_date
     FROM products p
@@ -163,12 +166,33 @@ ipcMain.handle('get-products-invoiced', () => {
            (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'na magazynie') as items_in_stock,
            (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'sprzedany') as items_sold,
            (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as items_invoiced,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND needs_restocking = 1) as items_to_restock,
            (SELECT MAX(sale_date) FROM product_items WHERE product_id = p.id AND status IN ('sprzedany', 'fakturowany')) as last_sale_date,
            (SELECT MAX(invoice_date) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as last_invoice_date
     FROM products p
     WHERE EXISTS (
       SELECT 1 FROM product_items 
       WHERE product_id = p.id AND status = 'fakturowany'
+    )
+  `;
+  return db.prepare(query).all();
+});
+
+// Obsługa pobierania produktów do uzupełnienia
+ipcMain.handle('get-products-to-restock', () => {
+  const query = `
+    SELECT p.*, 
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id) as total_items,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'na magazynie') as items_in_stock,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'sprzedany') as items_sold,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as items_invoiced,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND needs_restocking = 1) as items_to_restock,
+           (SELECT MAX(sale_date) FROM product_items WHERE product_id = p.id AND status IN ('sprzedany', 'fakturowany')) as last_sale_date,
+           (SELECT MAX(invoice_date) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as last_invoice_date
+    FROM products p
+    WHERE EXISTS (
+      SELECT 1 FROM product_items 
+      WHERE product_id = p.id AND needs_restocking = 1
     )
   `;
   return db.prepare(query).all();
@@ -241,6 +265,25 @@ ipcMain.handle('sell-product', (event, { id, quantity }) => {
     itemsToUpdate.forEach(item => {
       updateItemStmt.run(item.id);
     });
+    
+    // Sprawdź, czy po sprzedaży nie ma już więcej produktów tego typu na magazynie
+    const remainingItemsStmt = db.prepare(`
+      SELECT COUNT(*) as count FROM product_items 
+      WHERE product_id = ? AND status = 'na magazynie'
+    `);
+    
+    const remainingItems = remainingItemsStmt.get(id);
+    
+    // Jeśli nie ma więcej produktów na magazynie, oznacz sprzedane jako potrzebujące uzupełnienia
+    if (remainingItems.count === 0) {
+      const markForRestockingStmt = db.prepare(`
+        UPDATE product_items 
+        SET needs_restocking = 1
+        WHERE product_id = ? AND status = 'sprzedany'
+      `);
+      
+      markForRestockingStmt.run(id);
+    }
     
     return itemsToUpdate.length;  // zwróć liczbę zaktualizowanych elementów
   });
@@ -381,10 +424,20 @@ ipcMain.handle('create-invoice', (event, invoiceData) => {
             VALUES (?, ?, ?, ?, ?)
         `);
         
+        // Sprawdź ilość dostępną na magazynie
+        const checkAvailabilityStmt = db.prepare(`
+            SELECT COUNT(*) as available_count FROM product_items 
+            WHERE product_id = ? AND status = 'na magazynie'
+        `);
+        
         // Aktualizuj ilość oryginalnego produktu
         const updateProductStmt = db.prepare(`
             UPDATE products 
-            SET quantity = quantity - ?
+            SET quantity = 
+                CASE
+                    WHEN quantity - ? >= 0 THEN quantity - ?
+                    ELSE 0
+                END
             WHERE id = ?
         `);
         
@@ -403,6 +456,12 @@ ipcMain.handle('create-invoice', (event, invoiceData) => {
                 invoice_id = ?
             WHERE id = ?
         `);
+        
+        // Dodaj nowe elementy produktu do uzupełnienia
+        const addRestockItemStmt = db.prepare(`
+            INSERT INTO product_items (product_id, status, needs_restocking, invoice_id, invoice_date)
+            VALUES (?, 'fakturowany', 1, ?, datetime('now'))
+        `);
 
         items.forEach(item => {
             // Dodaj pozycję do faktury
@@ -414,22 +473,37 @@ ipcMain.handle('create-invoice', (event, invoiceData) => {
                 item.quantity * item.unit_price
             );
             
+            // Sprawdź dostępną ilość
+            const availabilityCheck = checkAvailabilityStmt.get(item.product_id);
+            const availableCount = availabilityCheck.available_count;
+            
             // Zmniejsz ilość oryginalnego produktu
             updateProductStmt.run(
+                item.quantity,
                 item.quantity,
                 item.product_id
             );
             
             // Znajdź dostępne elementy produktu
-            const availableItems = getAvailableItemsStmt.all(item.product_id, item.quantity);
+            const availableItems = getAvailableItemsStmt.all(item.product_id, availableCount);
             
-            // Zaktualizuj status każdego elementu
+            // Zaktualizuj status każdego dostępnego elementu
             availableItems.forEach(availableItem => {
                 updateItemStmt.run(
                     invoiceId,
                     availableItem.id
                 );
             });
+            
+            // Jeśli brakuje produktów, dodaj elementy do uzupełnienia
+            if (availableCount < item.quantity) {
+                const missingCount = item.quantity - availableCount;
+                
+                // Dodaj brakujące elementy jako "fakturowany" i oznacz jako "do uzupełnienia"
+                for (let i = 0; i < missingCount; i++) {
+                    addRestockItemStmt.run(item.product_id, invoiceId);
+                }
+            }
         });
         
         return { success: true, invoiceId };
@@ -476,4 +550,51 @@ ipcMain.handle('clear-database', () => {
     } catch (error) {
         return { success: false, message: 'Błąd podczas czyszczenia bazy danych: ' + error.message };
     }
+});
+
+// Dodanie nowego endpointu do oznaczania produktów jako uzupełnionych
+ipcMain.handle('mark-as-restocked', (event, productId) => {
+  const transaction = db.transaction(() => {
+    // Policz ile elementów wymaga uzupełnienia
+    const countRestockItemsStmt = db.prepare(`
+      SELECT COUNT(*) as count_to_restock FROM product_items
+      WHERE product_id = ? AND needs_restocking = 1
+    `);
+    
+    const countResult = countRestockItemsStmt.get(productId);
+    const countToRestock = countResult.count_to_restock;
+    
+    // Oznacz wszystkie elementy produktu jako już uzupełnione
+    const markAsRestockedStmt = db.prepare(`
+      UPDATE product_items
+      SET needs_restocking = 0
+      WHERE product_id = ? AND needs_restocking = 1
+    `);
+    
+    markAsRestockedStmt.run(productId);
+    
+    // Dodaj nowe elementy produktu na magazyn
+    const addNewItemsStmt = db.prepare(`
+      INSERT INTO product_items (product_id, status)
+      VALUES (?, 'na magazynie')
+    `);
+    
+    // Dodaj odpowiednią liczbę nowych elementów
+    for (let i = 0; i < countToRestock; i++) {
+      addNewItemsStmt.run(productId);
+    }
+    
+    // Zaktualizuj ilość w głównej tabeli products
+    const updateProductQuantityStmt = db.prepare(`
+      UPDATE products
+      SET quantity = quantity + ?
+      WHERE id = ?
+    `);
+    
+    updateProductQuantityStmt.run(countToRestock, productId);
+    
+    return countToRestock; // zwróć liczbę uzupełnionych elementów
+  });
+  
+  return transaction();
 }); 
