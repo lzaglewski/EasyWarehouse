@@ -1,9 +1,31 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const Database = require('better-sqlite3');
 
+// Określenie ścieżki do bazy danych
+let dbPath;
+
+if (process.env.NODE_ENV === 'development') {
+  dbPath = 'warehouse.db';
+} else {
+  // W wersji produkcyjnej użyj katalogu danych aplikacji
+  const userDataPath = app.getPath('userData');
+  dbPath = path.join(userDataPath, 'warehouse.db');
+  
+  // Sprawdź, czy plik bazy danych istnieje w katalogu użytkownika, jeśli nie, skopiuj go z zasobów
+  if (!fs.existsSync(dbPath)) {
+    const resourceDbPath = process.resourcesPath ? path.join(process.resourcesPath, 'warehouse.db') : 'warehouse.db';
+    
+    // Jeśli plik istnieje w zasobach, skopiuj go
+    if (fs.existsSync(resourceDbPath)) {
+      fs.copyFileSync(resourceDbPath, dbPath);
+    }
+  }
+}
+
 // Inicjalizacja bazy danych
-const db = new Database('warehouse.db');
+const db = new Database(dbPath);
 
 // Tworzenie tabel
 db.exec(`
@@ -53,7 +75,13 @@ function createWindow() {
     }
   });
 
-  mainWindow.loadFile('index.html');
+  // Ładowanie pliku HTML z uwzględnieniem kontekstu (produkcja vs rozwój)
+  if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+    mainWindow.loadFile('index.html');
+  } else {
+    mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  }
+  
   // mainWindow.webContents.openDevTools(); // Odkomentuj dla trybu deweloperskiego
 }
 
@@ -112,6 +140,27 @@ ipcMain.handle('invoice-product', (event, id) => {
     WHERE id = ?
   `);
   return stmt.run(id).changes;
+});
+
+// Obsługa edycji produktu
+ipcMain.handle('edit-product', (event, product) => {
+  const stmt = db.prepare(`
+    UPDATE products 
+    SET name = ?,
+        description = ?,
+        quantity = ?,
+        unit_price = ?,
+        status = ?
+    WHERE id = ?
+  `);
+  return stmt.run(
+    product.name,
+    product.description,
+    product.quantity,
+    product.unitPrice,
+    product.status,
+    product.id
+  ).changes;
 });
 
 // Obsługa faktur
