@@ -15,10 +15,9 @@ db.exec(`
     unit_price REAL NOT NULL,
     status TEXT NOT NULL,
     sale_date TEXT,
-    invoice_date TEXT
+    invoice_date TEXT,
+    reserved_quantity INTEGER DEFAULT 0
   );
-
-  ALTER TABLE products ADD COLUMN reserved_quantity INTEGER DEFAULT 0;
 
   CREATE TABLE IF NOT EXISTS invoices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
