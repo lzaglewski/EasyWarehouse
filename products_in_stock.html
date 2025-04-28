@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>EasyWarehouse</title>
+    <title>EasyWarehouse - Produkty na magazynie</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .product-card {
@@ -22,15 +22,15 @@
             <div class="container-fluid">
                 <a class="navbar-brand" href="#">EasyWarehouse</a>
                 <div class="navbar-nav">
-                    <a class="nav-link active" href="index.html">Wszystkie produkty</a>
-                    <a class="nav-link" href="products_in_stock.html">Na magazynie</a>
+                    <a class="nav-link" href="index.html">Wszystkie produkty</a>
+                    <a class="nav-link active" href="products_in_stock.html">Na magazynie</a>
                     <a class="nav-link" href="products_invoiced.html">Fakturowane</a>
                     <a class="nav-link" href="invoices.html">Faktury</a>
                 </div>
             </div>
         </nav>
         
-        <h1>Wszystkie produkty</h1>
+        <h1>Produkty na magazynie</h1>
         
         <!-- Formularz dodawania produktu -->
         <div class="card mb-4">
@@ -63,7 +63,7 @@
         <!-- Lista produktów -->
         <div class="card">
             <div class="card-header">
-                <h5>Stan magazynowy</h5>
+                <h5>Produkty dostępne na magazynie</h5>
             </div>
             <div class="card-body">
                 <table class="table">
@@ -75,18 +75,16 @@
                             <th>Ilość</th>
                             <th>Cena</th>
                             <th>Status</th>
-                            <th>Data sprzedaży</th>
-                            <th>Data faktury</th>
                             <th>Akcje</th>
                         </tr>
                     </thead>
-                    <tbody id="productsList">
+                    <tbody id="inStockList">
                     </tbody>
                 </table>
             </div>
         </div>
     </div>
 
-    <script src="renderer.js"></script>
+    <script src="products_in_stock.js"></script>
 </body>
 </html> 

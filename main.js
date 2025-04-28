@@ -5,16 +5,21 @@ const Database = require('better-sqlite3');
 
 // Określenie ścieżki do bazy danych
 let dbPath;
+let isFirstRun = false;
 
 if (process.env.NODE_ENV === 'development') {
   dbPath = 'warehouse.db';
+  // Sprawdź, czy to pierwsze uruchomienie w trybie developerskim
+  isFirstRun = !fs.existsSync(dbPath);
 } else {
   // W wersji produkcyjnej użyj katalogu danych aplikacji
   const userDataPath = app.getPath('userData');
   dbPath = path.join(userDataPath, 'warehouse.db');
   
-  // Sprawdź, czy plik bazy danych istnieje w katalogu użytkownika, jeśli nie, skopiuj go z zasobów
-  if (!fs.existsSync(dbPath)) {
+  // Sprawdź, czy plik bazy danych istnieje w katalogu użytkownika
+  isFirstRun = !fs.existsSync(dbPath);
+  
+  if (isFirstRun) {
     const resourceDbPath = process.resourcesPath ? path.join(process.resourcesPath, 'warehouse.db') : 'warehouse.db';
     
     // Jeśli plik istnieje w zasobach, skopiuj go
@@ -26,6 +31,23 @@ if (process.env.NODE_ENV === 'development') {
 
 // Inicjalizacja bazy danych
 const db = new Database(dbPath);
+
+// Funkcja do wyczyszczenia bazy danych
+function clearDatabase() {
+  console.log('Czyszczenie bazy danych...');
+  try {
+    // Usunięcie wszystkich danych z tabel
+    db.exec(`
+      DELETE FROM product_items;
+      DELETE FROM invoice_items;
+      DELETE FROM invoices;
+      DELETE FROM products;
+    `);
+    console.log('Baza danych została wyczyszczona');
+  } catch (error) {
+    console.error('Błąd podczas czyszczenia bazy danych:', error.message);
+  }
+}
 
 // Tworzenie tabel
 db.exec(`
@@ -39,6 +61,17 @@ db.exec(`
     sale_date TEXT,
     invoice_date TEXT,
     reserved_quantity INTEGER DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS product_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'na magazynie',
+    sale_date TEXT,
+    invoice_date TEXT,
+    invoice_id INTEGER,
+    FOREIGN KEY (product_id) REFERENCES products(id),
+    FOREIGN KEY (invoice_id) REFERENCES invoices(id)
   );
 
   CREATE TABLE IF NOT EXISTS invoices (
@@ -62,6 +95,12 @@ db.exec(`
     FOREIGN KEY (product_id) REFERENCES products(id)
   )
 `);
+
+// Wyczyść bazę danych tylko przy pierwszym uruchomieniu
+if (isFirstRun) {
+  console.log('Pierwsze uruchomienie aplikacji, resetowanie bazy danych...');
+  clearDatabase();
+}
 
 let mainWindow;
 
@@ -101,66 +140,231 @@ app.on('activate', () => {
 
 // Obsługa zdarzeń IPC
 ipcMain.handle('get-products', () => {
-  return db.prepare('SELECT * FROM products').all();
+  const query = `
+    SELECT p.*, 
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id) as total_items,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'na magazynie') as items_in_stock,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'sprzedany') as items_sold,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as items_invoiced,
+           (SELECT MAX(sale_date) FROM product_items WHERE product_id = p.id AND status IN ('sprzedany', 'fakturowany')) as last_sale_date,
+           (SELECT MAX(invoice_date) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as last_invoice_date
+    FROM products p
+  `;
+  return db.prepare(query).all();
+});
+
+// Obsługa pobierania produktów na magazynie
+ipcMain.handle('get-products-in-stock', () => {
+  const query = `
+    SELECT p.*, 
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id) as total_items,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'na magazynie') as items_in_stock,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'sprzedany') as items_sold,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as items_invoiced,
+           (SELECT MAX(sale_date) FROM product_items WHERE product_id = p.id AND status IN ('sprzedany', 'fakturowany')) as last_sale_date,
+           (SELECT MAX(invoice_date) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as last_invoice_date
+    FROM products p
+    WHERE EXISTS (
+      SELECT 1 FROM product_items 
+      WHERE product_id = p.id AND status = 'na magazynie'
+    )
+  `;
+  return db.prepare(query).all();
+});
+
+// Obsługa pobierania produktów fakturowanych
+ipcMain.handle('get-products-invoiced', () => {
+  const query = `
+    SELECT p.*, 
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id) as total_items,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'na magazynie') as items_in_stock,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'sprzedany') as items_sold,
+           (SELECT COUNT(*) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as items_invoiced,
+           (SELECT MAX(sale_date) FROM product_items WHERE product_id = p.id AND status IN ('sprzedany', 'fakturowany')) as last_sale_date,
+           (SELECT MAX(invoice_date) FROM product_items WHERE product_id = p.id AND status = 'fakturowany') as last_invoice_date
+    FROM products p
+    WHERE EXISTS (
+      SELECT 1 FROM product_items 
+      WHERE product_id = p.id AND status = 'fakturowany'
+    )
+  `;
+  return db.prepare(query).all();
 });
 
 ipcMain.handle('add-product', (event, product) => {
-  const stmt = db.prepare(`
-    INSERT INTO products (name, description, quantity, unit_price, status)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-  return stmt.run(
-    product.name,
-    product.description,
-    product.quantity,
-    product.unitPrice,
-    'na magazynie'
-  ).lastInsertRowid;
+  // Transakcja do dodania produktu i jego elementów
+  const transaction = db.transaction(() => {
+    // Dodaj główny produkt
+    const productStmt = db.prepare(`
+      INSERT INTO products (name, description, quantity, unit_price, status)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    
+    const productResult = productStmt.run(
+      product.name,
+      product.description,
+      product.quantity,
+      product.unitPrice,
+      'na magazynie'
+    );
+    
+    const productId = productResult.lastInsertRowid;
+    
+    // Dodaj poszczególne elementy produktu
+    const itemStmt = db.prepare(`
+      INSERT INTO product_items (product_id, status)
+      VALUES (?, 'na magazynie')
+    `);
+    
+    // Dodaj tyle wpisów ile wynosi ilość
+    for (let i = 0; i < product.quantity; i++) {
+      itemStmt.run(productId);
+    }
+    
+    return productId;
+  });
+  
+  return transaction();
 });
 
 ipcMain.handle('sell-product', (event, { id, quantity }) => {
-  const stmt = db.prepare(`
-    UPDATE products 
-    SET quantity = quantity - ?, 
-        status = CASE 
-          WHEN quantity - ? <= 0 THEN 'sprzedany'
-          ELSE status 
-        END,
-        sale_date = datetime('now')
-    WHERE id = ?
-  `);
-  return stmt.run(quantity, quantity, id).changes;
+  const transaction = db.transaction(() => {
+    // Aktualizuj ilość w głównej tabeli produktów
+    const updateProductStmt = db.prepare(`
+      UPDATE products 
+      SET quantity = quantity - ?
+      WHERE id = ?
+    `);
+    
+    updateProductStmt.run(quantity, id);
+    
+    // Znajdź elementy produktu, które są na magazynie
+    const itemsToUpdateStmt = db.prepare(`
+      SELECT id FROM product_items 
+      WHERE product_id = ? AND status = 'na magazynie' 
+      LIMIT ?
+    `);
+    
+    const itemsToUpdate = itemsToUpdateStmt.all(id, quantity);
+    
+    // Aktualizuj status elementów
+    const updateItemStmt = db.prepare(`
+      UPDATE product_items 
+      SET status = 'sprzedany',
+          sale_date = datetime('now')
+      WHERE id = ?
+    `);
+    
+    itemsToUpdate.forEach(item => {
+      updateItemStmt.run(item.id);
+    });
+    
+    return itemsToUpdate.length;  // zwróć liczbę zaktualizowanych elementów
+  });
+  
+  return transaction();
 });
 
 ipcMain.handle('invoice-product', (event, id) => {
-  const stmt = db.prepare(`
-    UPDATE products 
-    SET status = 'fakturowany',
-        invoice_date = datetime('now')
-    WHERE id = ?
-  `);
-  return stmt.run(id).changes;
+  const transaction = db.transaction(() => {
+    // Znajdź sprzedane elementy produktu, które nie są jeszcze fakturowane
+    const itemsToUpdateStmt = db.prepare(`
+      SELECT id FROM product_items 
+      WHERE product_id = ? AND status = 'sprzedany' AND invoice_id IS NULL
+    `);
+    
+    const itemsToUpdate = itemsToUpdateStmt.all(id);
+    
+    // Aktualizuj status elementów
+    const updateItemStmt = db.prepare(`
+      UPDATE product_items 
+      SET status = 'fakturowany',
+          invoice_date = datetime('now')
+      WHERE id = ?
+    `);
+    
+    itemsToUpdate.forEach(item => {
+      updateItemStmt.run(item.id);
+    });
+    
+    return itemsToUpdate.length;  // zwróć liczbę zaktualizowanych elementów
+  });
+  
+  return transaction();
 });
 
 // Obsługa edycji produktu
 ipcMain.handle('edit-product', (event, product) => {
-  const stmt = db.prepare(`
-    UPDATE products 
-    SET name = ?,
-        description = ?,
-        quantity = ?,
-        unit_price = ?,
-        status = ?
-    WHERE id = ?
-  `);
-  return stmt.run(
-    product.name,
-    product.description,
-    product.quantity,
-    product.unitPrice,
-    product.status,
-    product.id
-  ).changes;
+  const transaction = db.transaction(() => {
+    // Najpierw pobierz aktualny stan produktu
+    const currentProduct = db.prepare(`
+      SELECT * FROM products WHERE id = ?
+    `).get(product.id);
+    
+    // Aktualizuj dane produktu
+    const updateProductStmt = db.prepare(`
+      UPDATE products 
+      SET name = ?,
+          description = ?,
+          unit_price = ?
+      WHERE id = ?
+    `);
+    
+    const result = updateProductStmt.run(
+      product.name,
+      product.description,
+      product.unitPrice,
+      product.id
+    );
+    
+    // Obsługa zmiany ilości
+    if (product.quantity !== currentProduct.quantity) {
+      // Jeśli ilość się zwiększyła, dodaj nowe elementy
+      if (product.quantity > currentProduct.quantity) {
+        const diff = product.quantity - currentProduct.quantity;
+        const addItemsStmt = db.prepare(`
+          INSERT INTO product_items (product_id, status)
+          VALUES (?, 'na magazynie')
+        `);
+        
+        for (let i = 0; i < diff; i++) {
+          addItemsStmt.run(product.id);
+        }
+      } 
+      // Jeśli ilość się zmniejszyła, usuń elementy
+      else if (product.quantity < currentProduct.quantity) {
+        const diff = currentProduct.quantity - product.quantity;
+        
+        // Najpierw znajdź elementy, które są na magazynie
+        const inStockItems = db.prepare(`
+          SELECT id FROM product_items 
+          WHERE product_id = ? AND status = 'na magazynie'
+          LIMIT ?
+        `).all(product.id, diff);
+        
+        // Usuń znalezione elementy
+        if (inStockItems.length > 0) {
+          const deleteItemStmt = db.prepare(`
+            DELETE FROM product_items WHERE id = ?
+          `);
+          
+          inStockItems.forEach(item => {
+            deleteItemStmt.run(item.id);
+          });
+        }
+      }
+    }
+    
+    // Zaktualizuj pole quantity w products (dla zachowania kompatybilności)
+    db.prepare(`
+      UPDATE products SET quantity = ?
+      WHERE id = ?
+    `).run(product.quantity, product.id);
+    
+    return result.changes;
+  });
+  
+  return transaction();
 });
 
 // Obsługa faktur
@@ -188,20 +392,37 @@ ipcMain.handle('create-invoice', (event, invoiceData) => {
         
         const invoiceId = invoiceResult.lastInsertRowid;
         
-        // Wstaw pozycje faktury i zaktualizuj stan magazynowy
+        // Wstaw pozycje faktury
         const itemStmt = db.prepare(`
             INSERT INTO invoice_items (invoice_id, product_id, quantity, unit_price, total_price)
             VALUES (?, ?, ?, ?, ?)
         `);
         
+        // Aktualizuj ilość oryginalnego produktu
         const updateProductStmt = db.prepare(`
             UPDATE products 
-            SET quantity = quantity - ?,
-                reserved_quantity = reserved_quantity - ?
+            SET quantity = quantity - ?
             WHERE id = ?
         `);
         
+        // Znajdź elementy produktu, które są na magazynie
+        const getAvailableItemsStmt = db.prepare(`
+            SELECT id FROM product_items 
+            WHERE product_id = ? AND status = 'na magazynie' 
+            LIMIT ?
+        `);
+        
+        // Aktualizuj status elementów produktu
+        const updateItemStmt = db.prepare(`
+            UPDATE product_items 
+            SET status = 'fakturowany',
+                invoice_date = datetime('now'),
+                invoice_id = ?
+            WHERE id = ?
+        `);
+
         items.forEach(item => {
+            // Dodaj pozycję do faktury
             itemStmt.run(
                 invoiceId,
                 item.product_id,
@@ -210,11 +431,22 @@ ipcMain.handle('create-invoice', (event, invoiceData) => {
                 item.quantity * item.unit_price
             );
             
+            // Zmniejsz ilość oryginalnego produktu
             updateProductStmt.run(
-                item.quantity,
                 item.quantity,
                 item.product_id
             );
+            
+            // Znajdź dostępne elementy produktu
+            const availableItems = getAvailableItemsStmt.all(item.product_id, item.quantity);
+            
+            // Zaktualizuj status każdego elementu
+            availableItems.forEach(availableItem => {
+                updateItemStmt.run(
+                    invoiceId,
+                    availableItem.id
+                );
+            });
         });
         
         return { success: true, invoiceId };
@@ -250,4 +482,14 @@ ipcMain.handle('get-invoice-details', (event, invoiceId) => {
     const items = itemsStmt.all(invoiceId);
     
     return { invoice, items };
+});
+
+// Endpoint do czyszczenia bazy danych
+ipcMain.handle('clear-database', () => {
+    try {
+        clearDatabase();
+        return { success: true, message: 'Baza danych została wyczyszczona' };
+    } catch (error) {
+        return { success: false, message: 'Błąd podczas czyszczenia bazy danych: ' + error.message };
+    }
 }); 
